@@ -1,0 +1,457 @@
+---
+title: "Creating and Analyzing Multi-Variable Earth Observation Data Cubes in R"
+author: "Marius Appel"
+date: "*Aug 18, 2020*"
+output: 
+  html_document:
+    theme: flatly
+    highlight: default
+    toc: true
+    toc_float:  
+      collapsed: false
+      smooth_scroll: false
+    toc_depth: 2
+bibliography: references.bib
+link-citations: yes
+csl: american-statistical-association.csl
+---
+
+```{r setup, include=FALSE}
+figtrim <- function(path) {
+  img <- magick::image_trim(magick::image_read(path))
+  #img <- magick::image_extent(img,magick::geometry_size_percent(width = 100, height = 110))
+  magick::image_write(img, path)
+  path
+}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_chunk$set(eval = FALSE)
+knitr::opts_chunk$set(out.width = "100%")
+knitr::opts_chunk$set(dev = "jpeg")
+knitr::opts_chunk$set(fig.process = figtrim)
+knitr::opts_chunk$set(fig.width = 10, fig.height = 10)
+```
+
+**OpenGeoHub Summer School 2020, Wageningen**
+
+
+
+# Outline
+
+
+- Part I (~60 mins): Introduction to Earth observation (EO) data cubes and the `gdalcubes` R package
+
+- **Part II (~30 mins): Examples on using data cubes to combine imagery from different satellite-based EO missions**
+
+- Part III (~30 mins): Summary, discussion, and practical exercises
+
+
+All the material of this tutorial is online at [GitHub](https://github.com/appelmar/opengeohub_summerschool2020), including R markdown sources, rendered HTML output, and solutions to the practical exercises. 
+
+
+
+
+
+
+
+# Part II: Data Cubes from different EO products 
+
+
+
+## First steps
+
+At first, we make sure to load all packages again and make sure to use up to 8 threads to create / process data cubes.
+
+```{r setup_gdalcubes}
+library(gdalcubes)
+library(magrittr)
+library(colorspace)
+gdalcubes_options(threads=8)
+```
+
+
+
+
+## Example 1: Building a combined NDVI data cube from Sentinel-2, Landsat 8, and MODIS data
+
+
+In this example, we are interested in monitoring the vegetation with NDVI as target variable. To get as much information as possible, we will use observations from Sentinel-2, Landsat 8, and MODIS (product [MOD09GA](https://lpdaac.usgs.gov/products/mod09gav006/)). These datasets have very different properties:
+
+| Dataset | Spatial Resolution (NDVI bands) | Temporal Resolution | File Format
+|------------------------------|-----------------|-----------------|-----------------|
+| Sentinel-2 Level 2A | 10m  | 5 days | .jp2
+| Landsat 8 surface reflectance |  30m  | 16 days | GeoTIFF
+| MODIS MOD09GA | 500m | daily | HDF4
+
+Our study area covers a region around Münster, Germany with mostly agricultural and some smaller forest areas.
+
+We start with an overview of available data:
+
+
+```{r sc1_01} 
+MOD.files = list.files("/media/marius/Samsung_T5/eodata/MOD09GA_MS", pattern = ".hdf",full.names = TRUE, recursive = TRUE)
+head(MOD.files, n = 3)
+length(MOD.files)
+sum(file.size(MOD.files)) / 1024^3 # GiB
+
+L8.files = list.files("/media/marius/Samsung_T5/eodata/L8_MS2019", pattern = ".tif",full.names = TRUE, recursive = TRUE)
+head(L8.files, n = 3)
+length(L8.files)
+sum(file.size(L8.files)) / 1024^3 # GiB
+
+S2.files = list.files("/media/marius/Samsung_T5/eodata/S2L2A_MS", pattern = ".zip",full.names = TRUE, recursive = TRUE)
+head(S2.files, n = 3)
+length(S2.files)
+sum(file.size(S2.files)) / 1024^3 # GiB
+```
+
+Notice that the Sentinel-2 images come from three different tiles covering two UTM zones. As in the first part, we now need to create separate image collections, which requires a bit of research to find the correct collection formats (e.g. using `collection_formats()`.
+
+
+
+```{r sc1_02} 
+if (!file.exists("MOD09GA.db")) {
+  MOD.col = create_image_collection(MOD.files, "MxD09GA", "MOD09GA.db")
+}
+MOD.col = image_collection("MOD09GA.db")
+MOD.col
+
+if (!file.exists("L8_MS.db")) {
+  L8.col = create_image_collection(L8.files, "L8_SR", "L8_MS.db")
+}
+L8.col = image_collection("L8_MS.db")
+L8.col
+
+if (!file.exists("S2_MS.db")) {
+  S2.col = create_image_collection(S2.files, "Sentinel2_L2A", "S2_MS.db")
+}
+S2.col = image_collection("S2_MS.db")
+S2.col
+```
+
+After carefully reading the product information from the data providers, we define separate masks to consider high-quality pixels only.
+
+
+```{r sc1_03} 
+MOD.mask = image_mask("state_1km", values=0, bits = 0:1, invert  = TRUE)
+L8.mask =  image_mask("PIXEL_QA", values=c(322, 386, 834, 898, 1346, 324, 388, 836, 900, 1348), invert = TRUE)
+S2.mask = image_mask("SCL", values=c(1,3,8,9,10))
+```
+
+
+We first build three data cubes with separate cube views to get an initial overview of the collections. 
+
+
+```{r sc1_04}
+MOD.v1 = cube_view(extent = MOD.col, dx = 5000, dt = "P1M", resampling = "average", srs = "EPSG:3857", aggregation = "median")
+raster_cube(MOD.col, MOD.v1, mask = MOD.mask) %>%
+  select_bands(c("sur_refl_b01", "sur_refl_b04", "sur_refl_b03")) %>%
+  plot(rgb = 1:3, zlim=c(0, 2000), ncol = 4)
+
+L8.v1 = cube_view(extent = L8.col, dx = 500, dt = "P1M", resampling = "average", srs = "EPSG:3857", aggregation = "median")
+raster_cube(L8.col, L8.v1, mask = L8.mask) %>%
+  select_bands(c("B02", "B03", "B04")) %>%
+  plot(rgb = 3:1, zlim=c(0,2000), ncol=4)
+
+S2.v1 = cube_view(extent = S2.col, dx = 500, dt = "P1M", resampling = "average", srs = "EPSG:3857", aggregation = "median")
+raster_cube(S2.col, S2.v1, mask = S2.mask) %>%
+  select_bands(c("B02", "B03", "B04")) %>%
+  plot(rgb = 3:1, zlim=c(0,2000), ncol=4)
+```
+
+
+Now, we define our spatiotemporal area of interest, desired resolution, and build separate data cubes with NDVI measurements.
+
+
+```{r sc1_05}
+srs = "EPSG:32632"
+aoi = list(left = 383695, right = 399749, bottom = 5751683, top = 5760444, t0="2019-04-01", t1 = "2019-10-31")
+v.aoi = cube_view(srs = srs, extent = aoi, dx = 200, dt = "P1D", resampling = "average", aggregation = "median")
+
+raster_cube(L8.col, v.aoi, mask = L8.mask) %>%
+  select_bands(c("B04", "B05")) %>%
+  apply_pixel("(B05-B04)/(B05+B04)", "NDVI")  -> L8.cube
+
+raster_cube(S2.col, v.aoi, mask = S2.mask) %>%
+  select_bands(c("B04", "B08")) %>%
+  apply_pixel("(B08-B04)/(B08+B04)", "NDVI") -> S2.cube
+
+raster_cube(MOD.col, cube_view(v.aoi, resampling = "bilinear"), mask = MOD.mask) %>%
+  select_bands(c("sur_refl_b01", "sur_refl_b02")) %>%
+  apply_pixel("(sur_refl_b02 - sur_refl_b01)/(sur_refl_b02 + sur_refl_b01)", "NDVI") -> MOD.cube
+```
+
+
+Now, we can combine all data cubes into a single data cube with three variables using the `join_bands()` function. The `cube_names` argument here is used to add prefixes and ensure unique band names of the output data cube. As a first step, we count the number of observations of pixel time series from the different datasets.
+
+```{r sc1_06}
+combined.cube = join_bands(list(L8.cube, S2.cube, MOD.cube), cube_names = c("L8", "S2", "MOD")) 
+combined.cube
+
+combined.cube %>%
+  reduce_time("count(L8.NDVI)", "count(S2.NDVI)", "count(MOD.NDVI)") %>%
+  plot(key.pos=1, zlim=c(0, 80), col = viridis::viridis, nbreaks=19, ncol = 3)
+```
+
+
+
+Having all data available in one data cube for example allows to create a simple _best available NDVI_ image time series.
+
+
+```{r sc1_07}
+ndvi.col = function(n) {
+  rev(sequential_hcl(n, "Green-Yellow"))
+}
+join_bands(list(L8.cube, S2.cube, MOD.cube), cube_names = c("L8", "S2", "MOD")) %>%
+  apply_time(names="NDVI_BEST", FUN = function(x) {
+    out = x["MOD.NDVI",]
+    L8.idx = which(!is.na(x["L8.NDVI",]))
+    out[L8.idx] = x["L8.NDVI",L8.idx]
+    S2.idx = which(!is.na(x["S2.NDVI",]))
+    out[S2.idx] = x["S2.NDVI",S2.idx]
+    out
+  }) %>%
+  plot(key.pos = 1, t = 150:169, col = ndvi.col)
+```
+
+This is of course a very optimistic approach, assuming that NDVI values of different sensors are comparable. Another (optimistic) approach, which completely fills the NDVI pixel time series, might be to use MODIS observations only to identify the temporal trend and then apply the trend to e.g. Sentinel-2 observations to fill gaps, as in the following.
+
+
+```{r sc1_08}
+join_bands(list(S2.cube, MOD.cube), cube_names = c("S2", "MOD")) %>%
+  apply_time(names="NDVI", FUN = function(x) {
+    library(zoo)
+    mod.ndvi = na.approx(x["MOD.NDVI",], na.rm = FALSE)
+    mod.ndvi.diff = c(0, diff(mod.ndvi))
+    
+    out = rep(NA, ncol(x))
+    
+    S2.idx = which(!is.na(x["S2.NDVI",]))
+    if (length(S2.idx) > 1) {
+      for (i in S2.idx[1]:ncol(x)){
+        if (!is.na(x["S2.NDVI",i])) {
+         out[i] = x["S2.NDVI",i]
+        }
+        else {
+          out[i] =  out[i-1] + mod.ndvi.diff[i]
+        }
+      }
+    }
+    out
+  }) %>%
+  plot(key.pos = 1, t = 150:169, col = ndvi.col)
+```
+
+There are of course a lot of issues here, too. For example, the result contains NDVI values > 1. However, it is easy to think about improvements to this method (e.g., learning from days when observations from all sensors are available).
+
+
+# Example 2: Joint analysis of satellite derived vegetation, precipitation, and soil moisture observations
+
+
+Instead of combining data from different sensors but the same target variable, we may use data cubes to analyze 
+interactions or correlations between different variables. In the example below, we combine NDVI vegetation index observations from MODIS ([MOD13A2](https://lpdaac.usgs.gov/products/mod13a2v006)), daily precipitation from the Global precipitation measurement mission ([GPM_3IMERGDF](https://disc.gsfc.nasa.gov/datasets/GPM_3IMERGDF_06/summary), @huffman2019gpm), and daily soil moisture from ESA CCI [ESA CCI](https://www.esa-soilmoisture-cci.org/) [@gruber2019evolution, @dorigo2017esa, @gruber2017triple]. 
+
+
+As in the previous example, we start by creating image collections for all different datasets.
+
+
+```{r sc2_01}
+MOD13A2.files = list.files("/media/marius/Samsung_T5/eodata/MOD13A2", recursive = TRUE, full.names = TRUE, pattern=".hdf")
+head(MOD13A2.files)
+if (!file.exists("MOD13A2.db")) {
+  MOD13A2.collection = create_image_collection(MOD13A2.files, "MxD13A2", "MOD13A2.db")
+}
+MOD13A2.collection = image_collection("MOD13A2.db")
+MOD13A2.collection
+
+GPM.files = list.files("/media/marius/Samsung_T5/eodata/GPM", recursive = TRUE, full.names = TRUE, pattern=".tif")
+head(GPM.files)
+if (!file.exists("GPM.db")) {
+  GPM.collection = create_image_collection(GPM.files, "GPM_IMERG_3B_DAY_GIS_V06A", "GPM.db")
+}
+GPM.collection = image_collection("GPM.db")
+GPM.collection
+
+SM.files = list.files("/media/marius/Samsung_T5/eodata/ESACCI-SOILMOISTURE-PASSIVE",
+                      recursive = TRUE, full.names = TRUE, pattern=".*nc")
+head(SM.files)
+if (!file.exists("SM.db")) {
+  SM.collection = create_image_collection(SM.files, "ESA_CCI_SM_PASSIVE.json", "SM.db")
+}
+SM.collection = image_collection("SM.db")
+SM.collection
+```
+
+
+We now define our area of interest, select the variables of interest, and plot separate data cubes (using the same data cube view) for one year to get an initial overview.
+
+
+```{r sc2_04}
+view_de = cube_view(srs = "EPSG:3035", extent = list(left=4039313, bottom=2775429,right=4670348, top=3482115, t0 = "2018-01", t1="2018-12"), dx = 5000, dt = "P1M", aggregation = "mean", resampling = "bilinear")
+  
+ndvi.col = function(n) {
+  rev(sequential_hcl(n, "Green-Yellow"))
+}
+
+prcp.col = function(n) {
+  rev(sequential_hcl(n, "Purple-Blue"))
+}
+
+raster_cube(MOD13A2.collection, view_de) %>%
+  select_bands("NDVI") %>% 
+  plot(key.pos = 1, col = ndvi.col)
+
+raster_cube(GPM.collection, view_de) %>%
+  select_bands("total_accum") %>% 
+  plot(key.pos = 1, col = prcp.col, zlim = c(0, 100), nbreaks = 100)
+
+raster_cube(SM.collection, view_de) %>%
+  select_bands("sm") %>%
+  plot(key.pos = 1, zlim = c(0,1), col = prcp.col, nbreaks=100)
+```
+
+
+
+Next, we remove seasonal and trend components of the time series and call the remainder anomalies. This can be done with the `apply_time()` function by providing a user-defined R function over pixel time series. To keep this example simple and computation times in the order of minutes, we still aggregate our observations monthly and limit our analysis to four years. We first convert time series to `ts` objects and use the `stl()` function to decompose the time series.  We need some extra NA handling to make sure we have complete time series for NDVI and soil moisture or return complete NA series before `stl()` may produce errors due to missing data. To include a potential delayed influence of soil moisture and precipitation anomalies on vegetation, we furthermore compute rolling means of the last two months of both variables before decomposing the time series.
+
+```{r sc2_05}
+view_de = cube_view(view_de, extent = list(t0 = "2015-01", t1 = "2018-12"))
+
+raster_cube(MOD13A2.collection, view_de) %>%
+  select_bands("NDVI") %>%
+  apply_time(name = "NDVI_anomaly", FUN = function(x) {
+    library(zoo)
+    y = na.approx(x["NDVI",], na.rm = FALSE)
+    if (any(is.na(y))) return(rep(NA, ncol(x)))
+    y = ts(y, frequency = 12,  start = c(2015, 1))
+    y_decomposed = stl(y, "periodic")
+    res = as.vector(y_decomposed$time.series[,"remainder"])
+    return(res)
+  }) -> ndvi.anom
+
+# raster_cube(GPM.collection, view_de) %>%
+#   select_bands("total_accum") %>% 
+#   apply_time(names = "prcp_anomaly", FUN = function(x) {
+#     library(zoo)
+#     y = x["total_accum",]
+#     if (any(is.na(y))) return(rep(NA, ncol(x)))
+#     y = rollmean(y, 2, fill = NA, align = "right")
+#     y = ts(y[-1], frequency = 12,  start = c(2015, 2))
+#     y_decomposed = stl(y, "periodic")
+#     res = c(0, as.vector(y_decomposed$time.series[,"remainder"]))
+#     return(res)
+#   }) -> prcp.anom
+
+# spi.col = function(n) {
+#   rev(divergex_hcl(n, "RdBu"))
+# }
+
+raster_cube(GPM.collection, view_de) %>%
+  select_bands("total_accum") %>% 
+  apply_time(names = "spi", FUN = function(x) {
+    library(zoo)
+    library(precintcon)
+    year = as.numeric(substr(colnames(x), 1, 4))
+    month = as.numeric(substr(colnames(x), 5, 6))
+    y = data.frame(year = year, months = month, precipitation = x["total_accum",])
+    class(y) <- c("data.frame", "precintcon.monthly")
+    if (any(is.na(y$precipitation))) return(rep(1, ncol(x)))
+    spi_monthly = spi(y, period = 1)$spi
+    return(spi_monthly)
+  }) -> prcp.spi
+
+raster_cube(SM.collection, view_de) %>%
+  select_bands("sm") %>% 
+  apply_time(names = "sm_anomaly", FUN = function(x) {
+    library(zoo)
+    y = na.approx(x["sm",], na.rm = FALSE)
+    if (any(is.na(y))) return(rep(NA, ncol(x)))
+    y = rollmean(y, 2, fill = NA, align = "right")
+    y = ts(y[-1], frequency = 12,  start = c(2015, 2))
+    y_decomposed = stl(y, "periodic")
+    res = c(0, as.vector(y_decomposed$time.series[,"remainder"]))
+    return(res)
+  }) -> sm.anom
+```
+
+In applications, one would of course use much longer time series and might prefer daily temporal resolution. Furthermore, the interactions of our variables are very complex in reality (and my need to include more information on soil, vegetation type, elevation, and similar). To demonstrate how we can combine the three data cubes anyway, we simply apply a statistical test for zero correlation (Kendall's $\tau$) on `NDVI ~ PRCP` and `NDVI ~ SM` for each time series below.
+
+```{r sc2_07}
+join_bands(list(ndvi.anom, prcp.spi, sm.anom), cube_names = c("X1","X2","X3")) %>%
+  reduce_time(names = c("NDVI_SPI_0", "NDVI_SPI_1", "NDVI_SPI_2", "NDVI_SM_0", "NDVI_SM_1", "NDVI_SM_2"), FUN = function(x) {
+    v = data.frame(ndvi = x["X1.NDVI_anomaly", ], spi = x["X2.spi", ], sm = x["X3.sm_anomaly", ])
+    # use only April to October
+    month = as.numeric(substr(colnames(x), 5,6))
+    v = v[which(month >= 4 & month <= 10),]
+    if (sum(complete.cases(v)) < 6) return(rep(NA, 6))
+    n = nrow(v)
+    out = c(
+      cor(v$ndvi, v$spi, method = "kendall", use = "complete.obs" ),
+      cor(v$ndvi[2:n], v$spi[1:(n-1)], method = "kendall", use = "complete.obs" ),
+      cor(v$ndvi[3:n], v$spi[1:(n-2)], method = "kendall", use = "complete.obs" ),
+      cor(v$ndvi, v$sm, method = "kendall", use = "complete.obs" ),
+      cor(v$ndvi[2:n], v$sm[1:(n-1)], method = "kendall", use = "complete.obs" ),
+      cor(v$ndvi[3:n], v$sm[1:(n-2)], method = "kendall", use = "complete.obs" ))
+  }) -> result.cube
+  result.cube
+  plot(result.cube, key.pos = 1, zlim=c(-1,1), col = viridis::viridis)
+```
+
+The result contains $p$ values and $\tau$ estimates for both pairs of variables. 
+
+TODO
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r sc2_05666, include = FALSE}
+view_de = cube_view(view_de, extent = list(t0 = "2015-01", t1 = "2018-12"))
+
+raster_cube(GPM.collection, view_de) %>%
+  select_bands("total_accum") %>% 
+  apply_time(names = "prcp_anomaly", FUN = function(x) {
+    library(zoo)
+    library(SPEI)
+    y = x["total_accum",]
+    if (any(is.na(y))) return(rep(NA, ncol(x)))
+    
+    y = ts(y, frequency = 12,  start = c(2015, 1))
+    spi_monthly = spi(y, 1)
+    return(spi_monthly$fitted)
+  }) -> prcp.spi
+```
+
+
+```{r sc2_07, include = FALSE}
+join_bands(list(ndvi.anom, prcp.spi, sm.anom), cube_names = c("X1","X2","X3")) %>%
+  reduce_time(names = c("NDVI_PRCP_p", "NDVI_PRCP_r", "NDVI_SM_p", "NDVI_SM_r"), FUN = function(x) {
+    v = data.frame(ndvi = x["X1.NDVI_anomaly", ], spi = x["X2.prcp_anomaly", ], sm = x["X3.sm_anomaly", ])
+    if (sum(complete.cases(v)) < 6) return(rep(NA, 4))
+    
+    res1 = cor.test(v$ndvi, v$prcp, method = "kendall", use = "complete.obs")
+    
+    res2 = cor.test(v$ndvi, v$sm, method = "kendall", use = "complete.obs")
+    
+    return(c(res1$p.value, res1$estimate,
+             res2$p.value, res2$estimate))
+  }) -> result.cube
+  result.cube
+  plot(result.cube, bands = c(1,3,2,4),  key.pos = 1, zlim=c(-1,1), col = viridis::viridis)
+```
+
+
+
+# References
+

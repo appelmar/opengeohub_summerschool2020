@@ -1,0 +1,101 @@
+---
+title: "Creating and Analyzing Multi-Variable Earth Observation Data Cubes in R"
+author: "Marius Appel"
+date: "*Aug 18, 2020*"
+output: 
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float:  
+      collapsed: false
+      smooth_scroll: false
+    toc_depth: 2
+editor_options: 
+  chunk_output_type: console
+bibliography: references.bib
+link-citations: yes
+csl: american-statistical-association.csl
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(out.width = "100%")
+knitr::opts_chunk$set(dev = "jpeg")
+knitr::opts_chunk$set(fig.width = 10, fig.height = 10)
+```
+
+**OpenGeoHub Summer School 2020, Wageningen**
+
+
+
+# Outline
+
+
+- Part I (~60 mins): Introduction to Earth observation (EO) data cubes and the `gdalcubes` R package
+
+- Part II (~30 mins): Examples on using data cubes to combine imagery from different satellite-based EO missions**
+
+- **Part III (~30 mins): Summary, discussion, and practical exercises**
+
+
+
+-------------------------------------------------------------------------------------------------------------------
+
+
+
+# Summary and Discussion
+
+- This tutorial has demonstrated how to create and process Earth observation data cubes with the `gdalcubes` R package. The package hides complexities in the data (different resolutions of bands, different projections, overlapping areas, data formats). The C++ library strongly builds on GDAL for reading and warping imagery. 
+
+- The presented analyses have been rather simple, but in combination with other R packages, complex methods can be applied (think of using methods from machine learning or applying Geostatistical models). The data cube representation makes it straightforward to combine data from different sensors.
+
+- Performance depends on data formats (GeoTIFF, tiled, with overviews / COG is usually a very good choice). If this is important, the package also provides functions `translate_cog()` and `translate_gtiff()` to convert complete image collections. However, this may be only relevant for relatively simple methods, where the data reading / reasmpling is the computational bottleneck.
+
+- The data model is limited to 4 dimensions (x, y, t, band / variable) and requires orthorectified images. Data such as Sentinel-1 or Sentinel-5P need to be preprocessed before they can be used with gdalcubes. The `stars` package is much more flexible in these cases. 
+
+- Moving analyses with gdalcubes to cloud computing environments is still not as straightforward as one might think. Although GDAL (and hence gdalcubes) can directly read data from Amazon Web Services or Google Cloud Platform, where large data archives are already available,  some of those are difficult to discover (e.g., CSV files with URLS to Sentinel images) and in many cases data are not stored in cloud-optimized formats. However, some solutions to this are already available and include the SpatioTemporal Asset Catalog (STAC) and the cloud-optimized GeoTIFF format.
+
+- Lots of ideas for the future work, get in touch if you find bugs, have questions, ideas, or want to contribute in any other way. 
+
+
+
+------------------------------------------------------------------------------------------------------------------
+
+
+# Practical Exercises
+
+
+
+
+1. Start R. If not yet done, install the `gdalcubes` package from CRAN, and load it.
+
+2. If not yet done, download the sample dataset from https://uni-muenster.sciebo.de/s/e5yUZmYGX0bo4u9/download and unzip.
+
+3. Create an image collection from all GeoTIFF files in the unzipped directory.
+
+4. Create a *yearly* data cube from the image collection, covering the full spatiotemporal extent at 1 km resolution, using a *Brazil Mercator* projection (EPSG:5641).
+
+5. Select the near infrared band (`"B05"`) and plot the cube.
+
+6. Create a false-color image for the year 2017, using the red (`"B04"`), swir2 (`"B07"`), and blue (`"B02"`) bands as red, green, and blue channels.  You can select the year 2017 by creating a new data cube view (derived from the previous view, and setting both `t0 = "2017"`, and `t1 = "2017"`).
+
+
+
+7. Create a data cube for a spatial subarea (use the data cube view and mask below).
+```
+v.subarea = cube_view(extent=list(left=-6320000, right=-6220000, bottom=-600000, top=-500000, 
+        t0="2014-01-01", t1="2018-12-31"), dt="P1M", dx=100, dy=100
+        srs="EPSG:3857", aggregation = "median", resampling = "bilinear")
+                      
+L8.clear_mask = image_mask("PIXEL_QA", values=
+        c(322, 386, 834, 898, 1346, 324, 388, 836, 900, 1348), 
+        invert = TRUE)
+```
+
+8. Calculate the normalized difference moisture index (NDMI) using the formula "(B05-B06)/(B05+B06)". This index is used to assess vegetation water content. 
+
+
+9. Compute minimum, maximum, median, and mean NDMI values over time and plot the result.
+
+
+
