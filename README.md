@@ -1,6 +1,6 @@
 # Creating and Analyzing Multi-Variable Earth Observation Data Cubes in R
 
-_Tutorial at OpenGeoHub summer school 2020_
+_Tutorial at [OpenGeoHub summer school 2020](https://opengeohub.org/summer_school_2020)_
 
 
 ## Summary
