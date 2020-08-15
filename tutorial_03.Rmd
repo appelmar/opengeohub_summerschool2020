@@ -31,11 +31,11 @@ knitr::opts_chunk$set(fig.width = 10, fig.height = 10)
 # Outline
 
 
-- Part I (~60 mins): Introduction to Earth observation (EO) data cubes and the `gdalcubes` R package
+- Part I: Introduction to Earth observation (EO) data cubes and the `gdalcubes` R package
 
-- Part II (~30 mins): Examples on using data cubes to combine imagery from different satellite-based EO missions**
+- Part II: Examples on using data cubes to combine imagery from different satellite-based EO missions**
 
-- **Part III (~30 mins): Summary, discussion, and practical exercises**
+- **Part III: Summary, discussion, and practical exercises**
 
 
 
