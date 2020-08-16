@@ -59,13 +59,12 @@ _Please notice that the data used in this part of the tutorial is not available 
 
 ## First steps
 
-At first, we make sure to load all packages again and make sure to use up to 8 threads to create / process data cubes.
+At first, we make sure to load the needed packages again.
 
 ```{r setup_gdalcubes}
 library(gdalcubes)
 library(magrittr)
 library(colorspace)
-gdalcubes_options(threads=8)
 ```
 
 
