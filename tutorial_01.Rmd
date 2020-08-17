@@ -14,6 +14,8 @@ output:
 bibliography: references.bib
 link-citations: yes
 csl: american-statistical-association.csl
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -98,24 +100,22 @@ There are further R packages to process satellite imagery:
 
 - well established, stable, reliable
 - three-dimensional only, no multispectral AND multitemporal stacks
-- chaining operations on rasters (stacks / bricks) always writes intermediate results to disk
-- works on full resolution data, requires additional steps e.g. to try out things on lower resolution
 - modern version `terra` [@terra] recently published on CRAN (see https://cran.r-project.org/package=terra)
 
 
 `stars` [@stars] 
 
+- see tutorial by Edzer Pebesma yesterday
 - arbitrary dimensions
-- assumes a data cube as input (does not do spatial mosaicing, temporal aggregation)
 - has vector data cubes
-- lazy evaluation approach, compute only the pixels you see.
+- lazy evaluation approach, compute only the pixels you see
 
 
 
 
 
 
-## First steps
+## First steps with gdalcubes
 
 gdalcubes is a quite new C++ library and R package that mostly wraps functions of the C++ library. It uses GDAL to read, write, and warp images, but understands date/time and how complex satellite image data products are organized. We will focus on the R package here. To get started, please install the gdalcubes package from CRAN with:
 
@@ -187,13 +187,14 @@ To create a data cube view, we can use the `cube_view()` function:
 v.overview.500m = cube_view(srs="EPSG:3857", extent=L8.col, dx=500, dy=500, dt = "P1Y", resampling="average", aggregation="median")
 v.overview.500m
 
-v.subarea.60m = cube_view(extent=list(left=-6180000, right=-6080000, bottom=-550000, top=-450000, 
-   t0="2014-01-01", t1="2018-12-31"), dt="P1Y", dx=60, dy=60, srs="EPSG:3857", 
+v.subarea.100m = cube_view(extent=list(left=-6180000, right=-6080000, bottom=-550000, top=-450000, 
+   t0="2014-01-01", t1="2018-12-31"), dt="P1Y", dx=100, dy=100, srs="EPSG:3857", 
    aggregation = "median", resampling = "average")
-v.subarea.60m
+v.subarea.100m
 
-v.subarea.60m.daily =  cube_view(view = v.subarea.60m, dt="P1D") 
-v.subarea.60m.daily
+v.subarea.30m.daily = cube_view(view = v.subarea.100m, extent = 
+    list(t0 = "2015-01-01",t1 = "2015-12-31"), dt="P1D", dx=30, dy=30) 
+v.subarea.30m.daily
 ```
 
 
@@ -209,9 +210,9 @@ Having defined an *image collection*, and a *data cube view*, a data cube is sim
 ```{r L8datacube}
 L8.cube.overview = raster_cube(L8.col, v.overview.500m)
 L8.cube.overview
-L8.cube.subarea = raster_cube(L8.col, v.subarea.60m)
+L8.cube.subarea = raster_cube(L8.col, v.subarea.100m)
 L8.cube.subarea
-L8.cube.subarea.daily = raster_cube(L8.col, v.subarea.60m.daily)
+L8.cube.subarea.daily = raster_cube(L8.col, v.subarea.30m.daily)
 L8.cube.subarea.daily
 ```
 
@@ -228,6 +229,7 @@ There are some utility functions on data cubes, including:
 names(L8.cube.overview.rgb)
 srs(L8.cube.overview.rgb)
 bands(L8.cube.overview.rgb)
+dim(L8.cube.overview.rgb)
 ```
 
 
@@ -248,9 +250,8 @@ plot(select_bands(L8.cube.subarea, c("B02", "B03", "B04")), rgb=3:1, zlim=c(0,15
 Notice that we can also plot bands individually, creating a two-dimensional plot layout of bands and time. Using `key.pos = 1`, and `col=viridis::viridis`, we plot a legend at the bottom of the plot, and use the viridis color scales (this requires the viridis package). 
 
 ```{r L8plot2}
-plot(L8.cube.overview.rgb, zlim=c(0,1500), key.pos=1, col=viridis::viridis) 
+plot(L8.cube.overview.rgb, zlim=c(0,1500), key.pos=1, col=viridis::viridis)
 ```
-
 
 Plotting an identical data cube twice, with different visualization arguments `zlim`, `col`, and others will not need to reprocess the data cube again. `plot()` internally writes netCDF files to a temporary directory and remembers that a specific cube is already available.
 
@@ -264,7 +265,7 @@ To define a mask, we can use the `image_mask()` function. This function expects 
 
 ```{r L8masking}
 L8.clear_mask = image_mask("PIXEL_QA", values=c(322, 386, 834, 898, 1346, 324, 388, 836, 900, 1348), invert = TRUE)
-x = raster_cube(L8.col, v.subarea.60m, mask=L8.clear_mask) 
+x = raster_cube(L8.col, v.subarea.100m, mask=L8.clear_mask) 
 x = select_bands(x, c("B02","B03","B04"))
 plot(x, rgb=3:1, zlim=c(0,1500))
 ```
@@ -274,7 +275,7 @@ plot(x, rgb=3:1, zlim=c(0,1500))
 The data cube representation makes it straightforward to create animations, by plotting time slices of the cube individually, and use these plots as animation frames:
 
 ```{r L8anim1}
-animate(select_bands(raster_cube(L8.col, v.subarea.60m, mask = L8.clear_mask), c("B02","B03","B04")), rgb=3:1, zlim=c(0,1300))
+animate(select_bands(raster_cube(L8.col, v.subarea.100m, mask = L8.clear_mask), c("B02","B03","B04")), rgb=3:1, zlim=c(0,1300))
 ```
 
 
@@ -298,11 +299,18 @@ function can be used to process (only three-dimensional) data cubes with the `ra
 x = raster::stack(
   write_tif(
     select_bands(
-      raster_cube(L8.col, v.subarea.60m), "B05")))
+      raster_cube(L8.col, v.subarea.100m), "B05")))
 x
 ```
 
 
+The exported GeoTIFF files can also be used for interactive plotting using the `mapview` package.
+
+```{r}
+library(mapview)
+mapView(x[[1]], maxpixels =  4e+06, layer.name="B05",
+        map.types=c("Esri.WorldImagery","OpenTopoMap"))
+```
 
 
 ## Data Cube Processing
@@ -328,7 +336,7 @@ The implementation of these operations in gdalcubes works chunk-wise, i.e., read
 
 
 
-### Arithmetic Expressions on pixel band values
+### Arithmetic expressions on pixel band values
 
 The `apply_pixel()` function can be used to apply per-pixel arithmetic expressions on band values of a data cube. Examples include the calculation of vegetation indexes. The function takes a data cube, a string vector of arithmetic expressions, and a vector of result band names as arguments. Below, we derive the normalized difference vegetation index (NDVI) from the red and near infrared (NIR) channel. We can apply multiple expressions at the same time by providing a vector of expressions (and names).
 
@@ -338,9 +346,9 @@ library(colorspace)
 ndvi.col = function(n) {
   rev(sequential_hcl(n, "Green-Yellow"))
 }
-L8.ndvi = raster_cube(L8.col, v.subarea.60m, mask=L8.clear_mask) %>%
+L8.ndvi = raster_cube(L8.col, v.subarea.100m, mask=L8.clear_mask) %>%
   select_bands(c("B04","B05")) %>%
-  apply_pixel("(B05-B04)/(B05+B04)" , names = "NDVI", keep_bands=FALSE)
+  apply_pixel("(B05-B04)/(B05+B04)", names = "NDVI", keep_bands=FALSE)
 L8.ndvi
 plot(L8.ndvi, col=ndvi.col, zlim=c(-0.3,1), key.pos = 1)
 ```
@@ -351,22 +359,22 @@ Creating a chain of data cube operations still returns proxy objects, knowing th
 Similar to `apply_pixel()` we can filter pixels by arithmetic expressions with `filter_pixel()`.  Values of all bands for pixels not fulfilling a logical expression will be set to NA.
 
 ```{r L8ndvi_filter}
-raster_cube(L8.col, v.subarea.60m, mask=L8.clear_mask) %>%
+raster_cube(L8.col, v.subarea.100m, mask=L8.clear_mask) %>%
   select_bands(c("B04","B05")) %>%
   apply_pixel("(B05-B04)/(B05+B04)" , names = "NDVI") %>%
-  filter_pixel("NDVI < 0.6") %>%
+  filter_pixel("NDVI < 0.7") %>%
   plot(col=ndvi.col, zlim=c(-0.3,1), na.color = "aliceblue", key.pos = 1)
 ```
 
 
-### Reduction Over Time and Space
+### Reduction over time and space
 
 Data cubes can be reduced over the space and time dimensions. The `reduce_time()` function applies one or more reducer functions over pixel time series, producing a single (multiband) result image, whereas `reduce_space()` reduces time slices in the cube to single values (per band), resulting in a single (multiband) time series.
 
 The example below derives median NDVI values over all pixel time series.
 
 ```{r L8reducetime1}
-raster_cube(L8.col, v.subarea.60m, mask=L8.clear_mask) %>%
+raster_cube(L8.col, v.subarea.100m, mask=L8.clear_mask) %>%
   select_bands(c("B04","B05")) %>%
   apply_pixel("(B05-B04)/(B05+B04)", names = "NDVI", keep_bands=FALSE) %>%
   reduce_time("median(NDVI)") %>%
@@ -376,7 +384,7 @@ raster_cube(L8.col, v.subarea.60m, mask=L8.clear_mask) %>%
 Possible reducers include `"min"`, `"mean"`, `"median"`, `"max"`, `"count"` (count non-missing values), `"sum"`, `"var"` (variance), and `"sd"` (standard deviation). Reducer expressions are always given as a string starting with the reducer name followed by the band name in parentheses. Notice that it is not possible to apply more complex arithmetic expressions here.  It is however possible to mix reducers and bands:
 
 ```{r L8reducetime2}
-raster_cube(L8.col, v.subarea.60m, mask=L8.clear_mask) %>%
+raster_cube(L8.col, v.subarea.100m, mask=L8.clear_mask) %>%
   select_bands(c("B04","B05")) %>%
   apply_pixel("(B05-B04)/(B05+B04)", names = "NDVI", keep_bands=TRUE) %>%
   reduce_time("median(NDVI)", "mean(NDVI)","max(B05)")
@@ -385,7 +393,7 @@ raster_cube(L8.col, v.subarea.60m, mask=L8.clear_mask) %>%
 Results of `reduce_space()` are plotted as simple time series.
 
 ```{r L8space1}
-raster_cube(L8.col, v.subarea.60m,  mask=L8.clear_mask) %>%
+raster_cube(L8.col, v.subarea.100m,  mask=L8.clear_mask) %>%
   select_bands(c("B04","B05")) %>%
   apply_pixel("(B05-B04)/(B05+B04)", names = "NDVI") %>%
   reduce_space("median(NDVI)", "sd(NDVI)") %>%
@@ -412,15 +420,33 @@ We can see that there are almost no observations during the months from October 
 
 
 
+## Time-series methods
 
+There are two more built-in functions that operate on individual pixel time series. 
+
+The `fill_time()` function interpolates missing values by preceding or succeeding values (using simple linear or nearest neighbor interpolation, or carrying observations forwards or backwards), The `window_time()` function can either apply a moving window kernel, or apply a reducer function over moving windows. 
+
+In the example below, we sum NDVI changes between subsequent time slices in the data cube, and visualize the result using a diverging color scale from the `colorspace` package.
+
+```{r L8timeseries}
+col.trend = function(n) {
+  rev(diverging_hcl(n = n, palette = "Green-Brown"))
+}
+raster_cube(L8.col, v.subarea.100m, mask=L8.clear_mask) %>%
+  select_bands(c("B04","B05")) %>%
+  apply_pixel("(B05-B04)/(B05+B04)", names = "NDVI") %>%
+  fill_time(method = "locf") %>%
+  window_time(kernel = c(-1,1), window=c(1,0)) %>%
+  reduce_time("sum(NDVI)") %>%
+  plot(zlim=c(-0.4,0.4),col = col.trend, key.pos=1, nbreaks = 10)
+```
 
 
 
 
 ## Applying user-defined R functions
 
-So far, we have provided expressions and reducers as characters / strings. The reason was that these methods automatically translate to built-in C++ functions. In the current version, the following functions may also receive R functions as argument. This opens up quite a bunch of things we can do, e.g. using functions from our favorite R packages to process pixel time series. In the example below, we simply fit a line to individual NDVI pixel time series and return its slope (trend).
-
+So far, we have provided expressions and reducers as characters / strings. The reason was that these methods automatically translate to built-in C++ functions. In the current version, the following functions may also receive R functions as argument. 
 
 | Operator | Input | Output
 |----------|-----------------------------------------|-----------------------------------------|
@@ -429,16 +455,14 @@ So far, we have provided expressions and reducers as characters / strings. The r
 | `reduce_space` | Three-dimensional array with dimensions bands, x, and y      | Vector of band values
 | `apply_time`   |  Multi-band time series as a matrix   | Multi-band time series as a matrix
 
+This opens up quite a bunch of things we can do, e.g. using functions from our favorite R packages to process pixel time series. 
+In the example below, we simply fit a line to individual NDVI pixel time series and return its slope (trend).
 
 
 
 
 ```{r L8udf}
-col.trend = function(n) {
-  rev(diverging_hcl(n = n, palette = "Green-Brown"))
-}
-
-raster_cube(L8.col, cube_view(view = v.subarea.60m, dx=180), mask = L8.clear_mask) %>%
+raster_cube(L8.col, cube_view(view = v.subarea.100m, dx=180), mask = L8.clear_mask) %>%
   select_bands(c("B04","B05")) %>%
   apply_pixel("(B05-B04)/(B05+B04)", names = "NDVI") %>%
   reduce_time(names=c("ndvi_trend"), FUN=function(x) {
@@ -449,7 +473,7 @@ raster_cube(L8.col, cube_view(view = v.subarea.60m, dx=180), mask = L8.clear_mas
     }
     return(result) 
   }) %>%
-  plot(key.pos=1, col=col.trend, nbreaks=8, zlim=c(-0.2,0.2))
+  plot(key.pos=1, col=col.trend, nbreaks=10, zlim=c(-0.2,0.2))
 ```
 
 
@@ -465,7 +489,7 @@ There is no limit in what we can do in the provided R function, but we must take
 Similarly, we could create a maximum NDVI RGB composite image for 2016 with the following function:
 
 ```{r L8udf2}
-raster_cube(L8.col, cube_view(view = v.subarea.60m, dx=180, dt = "P16D", extent = list(t0 = "2016-01-01", t1="2016-12-31")), mask = L8.clear_mask) %>%
+raster_cube(L8.col, cube_view(view = v.subarea.100m, dx=180, dt = "P16D", extent = list(t0 = "2016-01-01", t1="2016-12-31")), mask = L8.clear_mask) %>%
   select_bands(c("B02","B03", "B04","B05")) %>%
   apply_pixel("(B05-B04)/(B05+B04)", names = "NDVI", keep_bands = TRUE) %>%
   reduce_time(names=c("R", "G", "B"), FUN=function(x) {
@@ -481,6 +505,41 @@ raster_cube(L8.col, cube_view(view = v.subarea.60m, dx=180, dt = "P16D", extent 
 ## Extraction from Data Cubes
 
 Besides exporting data cubes as netCDF or GeoTIFF files and converting to `stars` objects, package version 0.3.0 adds functions to extract points (`query_points()`), time series (`query_timeseries()`), and summary statistics over polygons (`zonal_statistics()`). These functions are especially useful for integration with vector data, e.g. to prepare training datasets for applying machine learning methods, or to enrich movement trajectories with environmental data.
+
+
+
+## Internals
+
+
+### Data cubes in memory
+
+Internally, data cubes are simple chunked arrays. A full data cube is not kept in memory (unless is has only one chunk). A chunk is simply a dense four-dimensional C++ array of type double. Chunks, which are completely empty, however, do not consume main memory and are propagated among cube operations. For example if one spatiotemporal chunk does not intersect with
+any images in a collection, it will be empty and operations will also be skipped. For this reason, working with higher temporal resolution (e.g. daily for Landsat 8) is not necessarily much slower. Exceptions to this include the application of user-defined R functions and the writing of dense files (netCDF / GeoTIFF). However, using compression should be effective in the latter case.
+
+For performance tuning, the size of chunks can be specified as additional argument to the `raster_cube()` function. This affects also parallelization.
+
+
+### Proxy Objects
+
+The package is mostly wrapping functions and objects in C++. It makes a lot of use of the `Rcpp` package and external pointers, pointing to temporary in-memory objects, managed in C++. Therefore, it is not 
+possible to use `save()` to save a data cube and reload it in a new R session. Proxy objects internally can be serialized as processing graphs. These are JSON text documents containing all information how a proxy object can be recreated.
+
+```{r asjson}
+raster_cube(L8.col, cube_view(view = v.subarea.100m, extent=list(t0="2014-01",t1="2018-12")), mask=L8.clear_mask) %>%
+  select_bands(c("B04","B05")) %>%
+  apply_pixel("(B05-B04)/(B05+B04)", names = "NDVI") %>%
+  fill_time(method = "locf") %>%
+  window_time(kernel = c(-1,1), window=c(1,0)) %>%
+  reduce_time("sum(NDVI)") %>%
+  as_json() %>% 
+  print()
+```
+
+### Futher package options
+
+
+Further global package options are documented in `?gdalcubes_options`.
+
 
 
 
